@@ -1,15 +1,26 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
-# Systemd’ni yoqish uchun muhim sozlamalar
-ENV container docker
-STOPSIGNAL SIGRTMIN+3
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Root userda ishlash
-USER root
+# Ishchi katalogni yaratish
 WORKDIR /app
+# Kerakli fayllarni konteynerga ko'chirish
+COPY server_2000.py server_2001.py server_2002.py server_2003.py kali_server.py /app/
+COPY server_8080 /app/server_8080
+COPY client_2004 /root/client_2004
+COPY kali_server.py /root/kali_server.py
 
-# Paketlarni o‘rnatish
+COPY server_8080.service /etc/systemd/system/server_8080.service
+
+# root foydalanuvchisini yaratish
+RUN  chmod +x /root/client_2004
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    apt-get install -y python3 python3-venv python3-scapy python3-pip \
+    systemd systemd-sysv ufw supervisor tzdata && \
+    ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime && \
+    dpkg-reconfigure --frontend noninteractive tzdata
+
 RUN apt-get update && apt-get install -y \
     python3 python3-venv python3-scapy python3-pip systemd systemd-sysv ufw supervisor \
     nano vim iproute2  net-tools iputils-ping bridge-utils iptables socat netcat  \
@@ -19,31 +30,35 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -s /bin/bash secureuser
 
 # Katalog va fayllarga ruxsat berish
-RUN chown -R root:root /app 
-RUN chmod -R 710 /app  # secureuser katalogni ko‘ra oladi, lekin o‘qiy olmaydi
-RUN find /app -type f -exec chmod 600 {} \;  # Fayllarni ishga tushirishni taqiqlash
+RUN chown -R root:root /app /root
+RUN chmod -R 700 /app /root # secureuser katalogni ko‘ra oladi, lekin o‘qiy olmaydi
+RUN find /app -type f -exec chmod 700 {} \;  # Fayllarni ishga tushirishni taqiqlash
 
-# Fayllarni yuklash
-COPY server_8080/ /app/server_8080/
-COPY server_2000.py server_2001.py server_2002.py server_2003.py ./
-COPY ./client_2004 /root/client_2004
-COPY ./kali_server.py /root/kali_server.py
+# Scapy o'rnatish
+RUN pip install scapy
 
-# Virtual muhit yaratish va kutubxonalarni o‘rnatish
+# server_8080 uchun virtual muhit yaratish va kutubxonalarni o'rnatish
 RUN python3 -m venv /app/server_8080/env && \
-    /app/server_8080/env/bin/pip install --no-cache-dir -r /app/server_8080/requirements.txt && \
-    /app/server_8080/env/bin/pip install scapy
+    /app/server_8080/env/bin/pip install -r /app/server_8080/requirements.txt
 
-# UFW sozlash
-RUN ufw allow 9876
+#RUN systemctl enable server_8080.service  #add service
 
-# Supervisor konfiguratsiyasini qo‘shish
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-
-# secureuser foydalanuvchisiga o‘tish
-USER secureuser
-
+# Portlarni ochish
 EXPOSE 2000 2001 2002 2003 8080 9876
 
-# Container ishga tushishi uchun Supervisorni ishlatish
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# UFW orqali portni ochish (UFW konteynerlarda odatda ishlatilmaydi, lekin agar kerak bo'lsa, hostda ochish tavsiya qilinadi)
+#RUN apt-get update && apt-get install -y ufw && \
+#    ufw allow from 0.0.0.0 to any port 9876
+
+#ENTRYPOINT ["/sbin/init"]  #added
+
+# Xizmatlarni ishga tushirish
+CMD ["sh", "-c", "\
+    python3 /app/server_2000.py --port 2000 & \
+    python3 /app/server_2001.py --port 2001& \
+    python3 /app/server_2002.py --port 2002& \
+    python3 /app/server_2003.py --port 2003& \
+    python3 /app/kali_server.py & \
+    /app/server_8080/env/bin/python3 /app/server_8080/manage.py runserver 0.0.0.0:8090 & \ 
+    tail -f /dev/null"]
+#USER secureuser
